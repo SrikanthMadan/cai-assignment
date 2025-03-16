@@ -2,19 +2,21 @@ import os
 import faiss
 import numpy as np
 import streamlit as st
+import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from sentence_transformers import SentenceTransformer
 from rank_bm25 import BM25Okapi
-import subprocess
-import time
+
+# Check for GPU
+device = "cuda" if torch.cuda.is_available() else "cpu"
 
 # Load smaller models for local machine
-embed_model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
+embed_model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2', device=device)
 
 # Use a lightweight open-access model
 model_name = "HuggingFaceH4/zephyr-7b-alpha"
 llm_tokenizer = AutoTokenizer.from_pretrained(model_name)
-llm = AutoModelForCausalLM.from_pretrained(model_name, device_map="auto")
+llm = AutoModelForCausalLM.from_pretrained(model_name, device_map="auto", trust_remote_code=True).to(device)
 
 # Ensure financial data directory exists
 if not os.path.exists("./financials"):
@@ -35,19 +37,19 @@ def load_documents(folder="./financials"):
 
 # Preprocess and embed documents
 def embed_documents(docs):
-    chunks = [chunk for doc in docs for chunk in doc.split("\n") if chunk.strip()]
+    chunks = [chunk.strip() for doc in docs for chunk in doc.split("\n") if chunk.strip()]
 
     if not chunks:
         raise ValueError("No valid chunks found in documents.")
 
-    embeddings = embed_model.encode(chunks)
+    embeddings = embed_model.encode(chunks, convert_to_numpy=True)
 
     if len(embeddings) == 0:
         raise ValueError("Embedding generation failed. Ensure documents are not empty.")
 
     # Store in FAISS index
     index = faiss.IndexFlatL2(embeddings.shape[1])
-    index.add(np.array(embeddings))
+    index.add(np.array(embeddings, dtype=np.float32))  # Ensure dtype is correct
 
     # Initialize BM25
     bm25 = BM25Okapi([chunk.split() for chunk in chunks])
@@ -60,21 +62,21 @@ def is_valid_query(query):
 
 # Hybrid Search (FAISS + BM25)
 def hybrid_search(query, index, bm25, chunks, top_k=5):
-    query_vec = embed_model.encode([query])
+    query_vec = embed_model.encode([query], convert_to_numpy=True)
 
     # FAISS dense search
-    _, faiss_results = index.search(query_vec, top_k)
+    _, faiss_results = index.search(query_vec.astype(np.float32), top_k)
 
     # BM25 keyword search
     bm25_results = bm25.get_top_n(query.split(), chunks, n=top_k)
 
-    results = list(set([chunks[i] for i in faiss_results[0]] + bm25_results))
+    results = list(set([chunks[i] for i in faiss_results[0] if i < len(chunks)] + bm25_results))
     return results[:top_k]
 
 # Generate response using LLM
 def generate_response(context, query):
     prompt = f"Answer the following financial question based on the context below:\n\nContext: {context}\n\nQuestion: {query}\nAnswer:"
-    input_ids = llm_tokenizer(prompt, return_tensors="pt").input_ids.to(llm.device)
+    input_ids = llm_tokenizer.encode(prompt, return_tensors="pt").to(device)
 
     output = llm.generate(input_ids, max_new_tokens=150, temperature=0.7)
     return llm_tokenizer.decode(output[0], skip_special_tokens=True)

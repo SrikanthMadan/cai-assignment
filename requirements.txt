@@ -1,6 +1,11 @@
-faiss-cpu
-numpy
-streamlit
 transformers
 sentence-transformers
+faiss-cpu
 rank-bm25
+streamlit
+torch
+torchvision
+torchaudio
+accelerate>=0.26.0
+numpy
+pandas

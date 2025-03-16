@@ -1,0 +1,5 @@
+[server]
+runOnSave = true
+
+[global]
+healthCheckTimeout = 180

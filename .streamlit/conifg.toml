@@ -2,4 +2,4 @@
 runOnSave = true
 
 [global]
-healthCheckTimeout = 180
+healthCheckTimeout = 300
